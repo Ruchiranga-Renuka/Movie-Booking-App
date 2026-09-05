@@ -18,6 +18,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedGenre = 'All';
 
   static const _genres = ['All', 'Action', 'Drama', 'Comedy', 'Thriller'];
+  static const Map<String, List<int>> _genreIdsByLabel = {
+    'Action': [28, 12, 878],
+    'Drama': [18],
+    'Comedy': [35],
+    'Thriller': [53, 27],
+  };
 
   @override
   void initState() {
@@ -32,11 +38,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _searchMovies(String query) {
+    final normalized = query.trim();
     setState(() {
-      _moviesFuture = query.trim().isEmpty
+      _moviesFuture = normalized.isEmpty
           ? _apiService.getNowPlaying()
-          : _apiService.searchMovies(query);
+          : _apiService.searchMovies(normalized);
     });
+  }
+
+  List<Movie> _filterMovies(List<Movie> movies) {
+    if (_selectedGenre == 'All') {
+      return movies;
+    }
+
+    final allowedGenreIds = _genreIdsByLabel[_selectedGenre] ?? const [];
+    return movies.where((movie) {
+      return movie.genreIds.any((genreId) => allowedGenreIds.contains(genreId));
+    }).toList();
   }
 
   @override
@@ -55,48 +73,70 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<List<Movie>>(
-        future: _moviesFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) return _ErrorState(onRetry: _searchMovies);
-          final movies = snapshot.data ?? [];
-          if (movies.isEmpty) {
-            return const Center(child: Text('No movies found'));
-          }
-          final visibleMovies = _selectedGenre == 'All' ? movies : movies;
-          return CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(child: _buildHeader()),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                sliver: SliverGrid(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final movie = visibleMovies[index];
-                      return MovieCard(
-                        movie: movie,
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => MovieDetailsScreen(movie: movie)),
-                        ),
-                      );
-                    },
-                    childCount: visibleMovies.length,
+      body: RefreshIndicator(
+        onRefresh: () async {
+          setState(() => _moviesFuture = _apiService.getNowPlaying());
+          await _moviesFuture;
+        },
+        child: FutureBuilder<List<Movie>>(
+          future: _moviesFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return _ErrorState(
+                onRetry: (query) {
+                  setState(() => _moviesFuture = _apiService.getNowPlaying());
+                },
+              );
+            }
+
+            final movies = snapshot.data ?? [];
+            final visibleMovies = _filterMovies(movies);
+
+            if (movies.isEmpty || visibleMovies.isEmpty) {
+              return ListView(
+                children: const [
+                  SizedBox(height: 140),
+                  Center(
+                    child: Text('No movies match this filter'),
                   ),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 230,
-                    childAspectRatio: 0.62,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
+                ],
+              );
+            }
+
+            return CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: _buildHeader()),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                  sliver: SliverGrid(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final movie = visibleMovies[index];
+                        return MovieCard(
+                          movie: movie,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => MovieDetailsScreen(movie: movie)),
+                          ),
+                        );
+                      },
+                      childCount: visibleMovies.length,
+                    ),
+                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 230,
+                      childAspectRatio: 0.62,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -123,7 +163,13 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 14),
           TextField(
             controller: _searchController,
+            textInputAction: TextInputAction.search,
             onSubmitted: _searchMovies,
+            onChanged: (value) {
+              if (value.trim().isEmpty) {
+                _searchMovies(value);
+              }
+            },
             decoration: InputDecoration(
               hintText: 'Search movies',
               prefixIcon: const Icon(Icons.search),
@@ -151,7 +197,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 return ChoiceChip(
                   label: Text(genre),
                   selected: _selectedGenre == genre,
-                  onSelected: (_) => setState(() => _selectedGenre = genre),
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedGenre = genre;
+                    });
+                  },
                 );
               },
             ),
